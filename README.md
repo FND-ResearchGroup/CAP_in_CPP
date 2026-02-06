@@ -1,6 +1,6 @@
 # CAP_in_CPP
 
-This repository contains scripts for the project "Anterior insular co-activation patterns associated with stress markers in chronic primary pain"
+This repository contains scripts for the project "Anterior insular co-activation patterns associated with stress markers in chronic primary pain". 
 
 Version: 1.0
 
@@ -12,9 +12,9 @@ Uploaded by: Salome Häuselmann, salome.haeuselmann@gmail.com
 
 Analysis - contains scripts for:
 
-• Clinical measures
+• Clinical measures (will be uploaded soon)
 
-• Co-activation patterns
+• Co-activation patterns (will be uploaded soon)
 
 
 ## Dependencies

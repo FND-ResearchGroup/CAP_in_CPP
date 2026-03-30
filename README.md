@@ -4,7 +4,7 @@ This repository contains scripts for the project "Anterior insular co-activation
 
 Version: 1.0
 
-Date: January 2026
+Date: March 2026
 
 Uploaded by: Salome Häuselmann, salome.haeuselmann@gmail.com
 
@@ -12,9 +12,9 @@ Uploaded by: Salome Häuselmann, salome.haeuselmann@gmail.com
 
 Analysis - contains scripts for:
 
-• Clinical measures (will be uploaded soon)
+• Clinical measures 
 
-• Co-activation patterns (will be uploaded soon)
+• Co-activation patterns (CAP) analysis
 
 
 ## Dependencies
@@ -30,4 +30,4 @@ MATLAB (R2023a) Toolboxes
 
 Python (version 3.12.7) Packages
 
-• https://atlas.brainnetome.org
+• https://github.com/miykael/atlasreader

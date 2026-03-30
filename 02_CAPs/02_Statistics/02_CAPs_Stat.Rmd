@@ -1,0 +1,755 @@
+#------------------------- Statistics for CAPs in CPP Publication -------------------------#
+
+Salome Häuselmann (salome.haeuselmann@gmail.com), Winter 2025
+
+This script visualises the Temporal Characteristics (TCs) of the CAPs and calculates statistics. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Setting up R
+
+## Clear Workspace and Load Packages
+
+```{r}
+rm(list = ls())
+
+pacman::p_load(tidyverse, dplyr, xlsx, readxl, ggplot2, ggpubr, forcats, cowplot, 
+               plyr, rstatix, reshape2, writexl, car, lawstat, multcomp, tidyr,
+               gtsummary, gridExtra, gt,lmerTest, MuMIn, gg.gap, lme4, Gmisc, 
+               lubridate, readxl, openxlsx, dplyr, multcomp, effectsize, car, dplyr, purrr)
+```
+
+
+## Set Working Directory
+
+```{r}
+# Seed directory
+file_path <- file.path("")
+
+```
+
+## Read in Excel file
+
+```{r}
+Duration <- read.xlsx(file_path, sheet = "Duration")
+ReOccurence <- read.xlsx(file_path, sheet = "RelativeOccurence")
+Entries <- read.xlsx(file_path, sheet = "Entries")
+ReEntries_t <- read.xlsx(file_path, sheet = "RelativeEntries_t")
+ReEntries_r <- read.xlsx(file_path, sheet = "RelativeEntries_r")
+Transition_CPP <- read.xlsx(file_path, sheet = "Transition_CPP", colNames = FALSE)
+Transition_HC <- read.xlsx(file_path, sheet = "Transition_HC", colNames = FALSE)
+ExcludedFrames <- read.xlsx(file_path, sheet = "ExcludedFrames")
+SelectedFrames <- read.xlsx(file_path, sheet = "SelectedFrames")
+RetainedFrames <- read.xlsx(file_path, sheet = "RetainedFrames")
+RelRetainedFrames <- read.xlsx(file_path, sheet = "RelRetainedFrames")
+CRF<- read.xlsx("")
+
+```
+
+# Reorganize Data
+
+## Add Clinical Characteristics to the Temporal Characteristics
+
+```{r}
+# Correct the P-Code Format
+CRF <- dplyr::rename(CRF, ID = p_code)
+
+# Rename "value" of the TC and combine all TC in one sheet.
+head(Duration) 
+Duration <- dplyr::rename(Duration, duration_value = value)
+ReOccurence <- dplyr::rename(ReOccurence, ReOccurence_value = value)
+Entries <- dplyr::rename(Entries, entries_value = value)
+ReEntries_t <- dplyr::rename(ReEntries_t, reentries_t_value = value)
+ReEntries_r <- dplyr::rename(ReEntries_r, reentries_r_value = value)
+ExcludedFrames <- dplyr::rename(ExcludedFrames, excludedframes_value = value)
+SelectedFrames <- dplyr::rename(SelectedFrames, selectedframes_value = value)
+RetainedFrames <- dplyr::rename(RetainedFrames, retainedframes_value = value)
+RetainedFrames <- RetainedFrames %>%
+  left_join(CRF %>% select(ID, group), by = "ID")
+RelRetainedFrames <-dplyr::rename(RelRetainedFrames, relretainedframes_value = value)
+
+
+df_TC <- merge(Duration, ReOccurence, by = c("ID", "State"), all = FALSE)
+df_TC <- merge(df_TC, Entries, by = c("ID", "State"), all = FALSE)
+df_TC <- merge(df_TC, ReEntries_t, by = c("ID", "State"), all = FALSE)
+df_TC <- merge(df_TC, ReEntries_r, by = c("ID", "State"), all = FALSE)
+
+df_TC_CRF <- df_TC %>%
+  left_join(CRF, by = "ID") %>%
+  left_join(ExcludedFrames %>% select(ID, excludedframes_value), by = "ID") %>%
+  left_join(SelectedFrames %>% select(ID, selectedframes_value), by = "ID") %>%
+  left_join(RetainedFrames %>% select(ID, retainedframes_value), by = "ID") %>%
+  left_join(RelRetainedFrames %>% select(ID, relretainedframes_value), by = "ID")
+  
+# save df subset
+new_subfolder <- file.path(output_directory, "for_cor")
+
+# Create the new subfolder if it doesn’t already exist
+if (!dir.exists(new_subfolder)) {
+  dir.create(new_subfolder)
+}
+
+output_file <- file.path(new_subfolder, "AnteriorInsula_K3_for_corr.xlsx")
+write.xlsx(df_TC_CRF, output_file) # This can now be used for correlation analysis. 
+
+df_TC_CRF$State<-revalue(df_TC_CRF$State, c("CAP 1"="CAP1","CAP 2"="CAP2","CAP 3"="CAP3"))
+
+# Show the class of selected variables
+vars <- c("ID","group","State","gender","psychMed","pain_med",
+          "age","sum_stai2_bdi","selectedframes_value",
+          "duration_value","reentries_r_value","ReOccurence_value")
+
+sapply(df_TC_CRF[vars], class)
+
+# Adapt classes
+df_TC_CRF$ID     <- factor(df_TC_CRF$ID)
+df_TC_CRF$group  <- factor(df_TC_CRF$group)
+df_TC_CRF$State  <- factor(df_TC_CRF$State)
+df_TC_CRF$gender <- factor(df_TC_CRF$gender)
+
+# If psychMed is a 0/1 indicator or categorical, treat as factor:
+df_TC_CRF$psychMed <- factor(df_TC_CRF$psychMed)
+df_TC_CRF$pain_med <- factor(df_TC_CRF$pain_med)
+
+```
+
+## Check the data
+
+```{r}
+str(df_TC_CRF)
+names(df_TC_CRF)
+
+```
+
+
+
+## Violin-Plots + Statistics 
+
+### TC Visualization + multiple t-test FDR corrected
+
+#### Duration
+
+```{r}
+d <- ggplot(df_TC_CRF, aes(x = group, y = duration_value, fill = group)) +   
+  geom_violin(trim = FALSE) +   
+  facet_wrap(~ State) +  # Create separate plots for each State
+  geom_jitter(aes(color = group), width = 0.2, size = 0.8, alpha = 0.6, show.legend = FALSE) +
+  theme_minimal() +   
+ scale_fill_manual(values = c("#7E7EBF", "#F5B1B4"))+ 
+  scale_color_manual(values = c("#160A78", "#EF6472")) +
+    scale_y_continuous(limits = c(0, 5), expand = c(0, 0), breaks = seq(0, 5, 1)) +
+  labs(y = "average duration [s]") +   
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 13),  
+    axis.text.y = element_text(size = 15),                         
+    axis.title.x = element_text(size = 15),                        
+    axis.title.y = element_text(size = 15),                        
+    plot.title = element_text(size = 15),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    strip.text = element_text(size = 15),  
+    axis.line = element_line(color = "black"),    
+    axis.ticks.y = element_line(color = "black", linewidth = 0.3),
+    axis.ticks.length = unit(3, "pt")    
+  )
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+fig3a <- d + stat_summary(fun.data=data_summary)
+
+# Save plot
+#plot.new()
+#tiff("Duration_Amy.tiff", height = 360, width = 500, units='mm' ,
+#     compression = "lzw", res = 300)    
+
+# dev.off() # Turn the PDF device off
+ggsave("Figure_3a.tiff",
+       plot = fig3a,
+       dpi = 600,
+       width = 5,
+       height = 6,
+       units = "in",
+       device = "tiff",
+       compression = "lzw")
+
+# Summary Statistics
+df_TC_CRF %>%
+  group_by(group,State) %>%
+  get_summary_stats(duration_value, type = "mean_sd")
+
+```
+
+#### Relative Entries (normalized to retained frames)
+
+```{r}
+e <- ggplot(df_TC_CRF, aes(x = group, y = reentries_r_value, fill = group)) +
+  geom_violin(trim = FALSE) +
+  facet_wrap(~ State) +  # Create separate plots for each State
+  geom_jitter(aes(color = group), width = 0.2, size = 0.8, alpha = 0.6, show.legend = FALSE) +
+  theme_minimal() +
+  scale_fill_manual(values = c("#7E7EBF", "#F5B1B4"))+ 
+  scale_color_manual(values = c("#160A78", "#EF6472")) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0), breaks = seq(0, 1, 0.2)) + # breaks at 0, 0.2, 0.4, 0.6, 0.8, 1
+  labs(y = "relative number of entries") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 13),  
+    axis.text.y = element_text(size = 15),                         
+    axis.title.x = element_text(size = 15),                        
+    axis.title.y = element_text(size = 15),                       
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    strip.text = element_text(size = 15),  
+    axis.line = element_line(color = "black"),
+    axis.ticks.y = element_line(color = "black", linewidth = 0.3),
+    axis.ticks.length = unit(3, "pt")   
+  )
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+fig3b <- e + stat_summary(fun.data=data_summary)
+fig3b
+ggsave("Figure_3b.tiff",
+       plot = fig3b,
+       dpi = 600,
+       width = 5,
+       height = 6,
+       units = "in",
+       device = "tiff",
+       compression = "lzw")
+
+# Summary Statistics
+df_TC_CRF %>%
+  group_by(group,State) %>%
+  get_summary_stats(reentries_r_value, type = "mean_sd")
+
+```
+
+#### Relative Occurence
+
+```{r}
+r <- ggplot(df_TC_CRF, aes(x = group, y = ReOccurence_value, fill = group)) +
+  geom_violin(trim = FALSE) +
+  facet_wrap(~ State) +  # Create separate plots for each State
+  geom_jitter(aes(color = group), width = 0.2, size = 0.8, alpha = 0.6, show.legend = FALSE) +
+  theme_minimal() +
+  scale_fill_manual(values = c("#7E7EBF", "#F5B1B4"))+ 
+  scale_color_manual(values = c("#160A78", "#EF6472")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) +  
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0), breaks = seq(0, 1, 0.2)) + 
+  labs(y = "relative occurrence") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 13), 
+    axis.text.y = element_text(size = 15),                         
+    axis.title.x = element_text(size = 15),                        
+    axis.title.y = element_text(size = 15),                       
+    plot.title = element_text(size = 15),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+    strip.text = element_text(size = 15),  
+        axis.line = element_line(color = "black"), 
+    axis.ticks.y = element_line(color = "black", linewidth = 0.3),
+    axis.ticks.length = unit(3, "pt")    
+  )
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+fig3c <- r + stat_summary(fun.data=data_summary)
+
+ggsave("Figure_3c.tiff",
+       plot = fig3c,
+       dpi = 600,
+       width = 5,
+       height = 6,
+       units = "in",
+       device = "tiff",
+       compression = "lzw")
+# Summary Statistics
+df_TC_CRF %>%
+  group_by(group,State) %>%
+  get_summary_stats(ReOccurence_value, type = "mean_sd")
+
+```
+
+### TC Modelling Primary Models
+#### Duration
+
+```{r}
+### Primary Model 
+## post-hoc with the linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_duration_Mx<-with(df_TC_CRF, lmer(duration_value ~ groups + gender + age + sum_stai2_bdi + psychMed +  selectedframes_value + (1 | ID)))
+summary(model_posthoc_duration_Mx)
+
+posthoc_results_duration_Mx <- summary(glht(model_posthoc_duration_Mx, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+posthoc_results_duration_Mx
+
+```
+
+#### Relative Entries (normalized to retained frames)
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_entries_Mx<-with(df_TC_CRF, lmer(reentries_r_value ~ groups + gender + age + sum_stai2_bdi + psychMed + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_entries_Mx)
+
+
+posthoc_results_entries_Mx <- summary(glht(model_posthoc_entries_Mx, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_entries_Mx
+
+```
+
+#### Relative Occurence
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_RO_Mx<-with(df_TC_CRF, lmer(ReOccurence_value ~ groups + gender + age + sum_stai2_bdi + psychMed  + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_RO_Mx)
+
+posthoc_results_RO_Mx <- summary(glht(model_posthoc_RO_Mx, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_RO_Mx
+```
+
+
+#### FDR over the 3 models
+
+```{r}
+# make sure your factors are prepared as you did
+
+# your contrasts (add CAP4 lines back in if you want them included in the global FDR)
+K <- c("(HC.CAP1)-(CPP.CAP1)=0",
+       "(HC.CAP2)-(CPP.CAP2)=0",
+       "(HC.CAP3)-(CPP.CAP3)=0")
+
+# helper to extract raw p-values from a model’s glht
+glht_table <- function(model, K, model_name) {
+  smry <- summary(glht(model, linfct = mcp(groups = K)), test = adjusted("none"))
+  print(smry)
+  data.frame(
+    model     = model_name,
+    contrast  = names(smry$test$coefficients),
+    estimate  = as.numeric(smry$test$coefficients),
+    se        = as.numeric(smry$test$sigma),
+    z_value   = as.numeric(smry$test$tstat),
+    p_raw     = as.numeric(smry$test$pvalues),
+    stringsAsFactors = FALSE
+  )
+}
+
+# gather all posthoc tests from all models
+all_tests <- bind_rows(
+  glht_table(model_posthoc_entries_Mx,  K, "entries"),
+  glht_table(model_posthoc_duration_Mx, K, "duration"),
+  glht_table(model_posthoc_RO_Mx,       K, "reoccurrence")
+)
+
+# add FDR corrections
+all_tests <- all_tests %>%
+  mutate(
+    p_fdr_global = p.adjust(p_raw, method = "fdr")               # FDR across ALL models/contrasts
+  ) %>%
+  group_by(model) %>%
+  mutate(
+    p_fdr_within_model = p.adjust(p_raw, method = "fdr")         # optional: FDR within each model
+  ) %>%
+  ungroup() %>%
+  arrange(p_fdr_global)
+
+# inspect results
+all_tests
+# If you want a per-model table:
+split(all_tests, all_tests$model)
+
+####Effect size calculation: Cohens d' = difference in mean/ SD_pooled (SD of residuals)
+
+all_tests <- all_tests %>%
+  mutate(
+    cohens_d = case_when(
+      model == "entries" ~ estimate / sigma(model_posthoc_entries_Mx),
+      model == "duration" ~ estimate / sigma(model_posthoc_duration_Mx),
+      model == "reoccurrence" ~ estimate / sigma(model_posthoc_RO_Mx)
+    )
+  )
+
+# View results with effect sizes
+all_tests %>%
+  select(model, contrast, estimate, se, p_raw, p_fdr_global, cohens_d)
+
+```
+
+### TC Modelling Minimal Models
+
+#### Duration
+
+```{r}
+### Minimal Model 
+## post-hoc with the linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_duration_Mx_min<-with(df_TC_CRF, lmer(duration_value ~ groups + gender + age +  selectedframes_value + (1 | ID)))
+summary(model_posthoc_duration_Mx_min)
+
+posthoc_results_duration_Mx_min <- summary(glht(model_posthoc_duration_Mx_min, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+posthoc_results_duration_Mx_min
+
+```
+
+#### Relative Entries (normalized to retained frames)
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_entries_Mx_min<-with(df_TC_CRF, lmer(reentries_r_value ~ groups + gender + age + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_entries_Mx_min)
+
+
+posthoc_results_entries_Mx_min <- summary(glht(model_posthoc_entries_Mx_min, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_entries_Mx_min
+
+```
+
+#### Relative Occurence
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_RO_Mx_min<-with(df_TC_CRF, lmer(ReOccurence_value ~ groups + gender + age + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_RO_Mx_min)
+
+posthoc_results_RO_Mx_min <- summary(glht(model_posthoc_RO_Mx_min, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_RO_Mx_min
+```
+
+
+#### FDR over the 3 models
+
+```{r}
+# make sure your factors are prepared as you did
+
+# your contrasts (add CAP4 lines back in if you want them included in the global FDR)
+K <- c("(HC.CAP1)-(CPP.CAP1)=0",
+       "(HC.CAP2)-(CPP.CAP2)=0",
+       "(HC.CAP3)-(CPP.CAP3)=0")
+
+# helper to extract raw p-values from a model’s glht
+glht_table <- function(model, K, model_name) {
+  smry <- summary(glht(model, linfct = mcp(groups = K)), test = adjusted("none"))
+  print(smry)
+  data.frame(
+    model     = model_name,
+    contrast  = names(smry$test$coefficients),
+    estimate  = as.numeric(smry$test$coefficients),
+    se        = as.numeric(smry$test$sigma),
+    z_value   = as.numeric(smry$test$tstat),
+    p_raw     = as.numeric(smry$test$pvalues),
+    stringsAsFactors = FALSE
+  )
+}
+
+# gather all posthoc tests from all models
+all_tests <- bind_rows(
+  glht_table(model_posthoc_entries_Mx_min,  K, "entries"),
+  glht_table(model_posthoc_duration_Mx_min, K, "duration"),
+  glht_table(model_posthoc_RO_Mx_min,       K, "reoccurrence")
+)
+
+# add FDR corrections
+all_tests <- all_tests %>%
+  mutate(
+    p_fdr_global = p.adjust(p_raw, method = "fdr")               # FDR across ALL models/contrasts
+  ) %>%
+  group_by(model) %>%
+  mutate(
+    p_fdr_within_model = p.adjust(p_raw, method = "fdr")         # optional: FDR within each model
+  ) %>%
+  ungroup() %>%
+  arrange(p_fdr_global)
+
+# inspect results
+all_tests
+# If you want a per-model table:
+split(all_tests, all_tests$model)
+
+####Effect size calculation: Cohens d' = difference in mean/ SD_pooled (SD of residuals)
+
+all_tests <- all_tests %>%
+  mutate(
+    cohens_d = case_when(
+      model == "entries" ~ estimate / sigma(model_posthoc_entries_Mx_min),
+      model == "duration" ~ estimate / sigma(model_posthoc_duration_Mx_min),
+      model == "reoccurrence" ~ estimate / sigma(model_posthoc_RO_Mx_min)
+    )
+  )
+
+# View results with effect sizes
+all_tests %>%
+  select(model, contrast, estimate, se, p_raw, p_fdr_global, cohens_d)
+
+```
+
+### TC Modelling Extended Models
+
+#### Duration
+
+```{r}
+### extended Model 
+## post-hoc with the linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_duration_Mx_ex<-with(df_TC_CRF, lmer(duration_value ~ groups + gender + age + sum_stai2_bdi + psychMed + pain_med + selectedframes_value + (1 | ID)))
+summary(model_posthoc_duration_Mx_ex)
+
+posthoc_results_duration_Mx_ex <- summary(glht(model_posthoc_duration_Mx_ex, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+posthoc_results_duration_Mx_ex
+
+```
+
+#### Relative Entries (normalized to retained frames)
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_entries_Mx_ex<-with(df_TC_CRF, lmer(reentries_r_value ~ groups + gender + age + sum_stai2_bdi + psychMed + pain_med + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_entries_Mx_ex)
+
+
+posthoc_results_entries_Mx_ex <- summary(glht(model_posthoc_entries_Mx_ex, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_entries_Mx_ex
+
+```
+
+#### Relative Occurence
+
+```{r}
+## post-hoc for linear mixed model ##
+# Create interaction term 
+df_TC_CRF$groups <- interaction(df_TC_CRF$group, df_TC_CRF$State)
+model_posthoc_RO_Mx_ex<-with(df_TC_CRF, lmer(ReOccurence_value ~ groups + gender + age + sum_stai2_bdi + psychMed  + pain_med + selectedframes_value+ (1 | ID)))
+summary(model_posthoc_RO_Mx_ex)
+
+posthoc_results_RO_Mx_ex <- summary(glht(model_posthoc_RO_Mx_ex, 
+                                linfct = mcp(groups = 
+                                               c("(HC.CAP1)-(CPP.CAP1)=0", 
+                                                 "(HC.CAP2)-(CPP.CAP2)=0", 
+                                                 "(HC.CAP3)-(CPP.CAP3)=0"))), 
+                           test = adjusted("fdr"))
+
+posthoc_results_RO_Mx_ex
+```
+
+
+#### FDR over the 3 models
+
+```{r}
+# make sure your factors are prepared as you did
+
+# your contrasts (add CAP4 lines back in if you want them included in the global FDR)
+K <- c("(HC.CAP1)-(CPP.CAP1)=0",
+       "(HC.CAP2)-(CPP.CAP2)=0",
+       "(HC.CAP3)-(CPP.CAP3)=0")
+
+# helper to extract raw p-values from a model’s glht
+glht_table <- function(model, K, model_name) {
+  smry <- summary(glht(model, linfct = mcp(groups = K)), test = adjusted("none"))
+  print(smry)
+  data.frame(
+    model     = model_name,
+    contrast  = names(smry$test$coefficients),
+    estimate  = as.numeric(smry$test$coefficients),
+    se        = as.numeric(smry$test$sigma),
+    z_value   = as.numeric(smry$test$tstat),
+    p_raw     = as.numeric(smry$test$pvalues),
+    stringsAsFactors = FALSE
+  )
+}
+
+# gather all posthoc tests from all models
+all_tests <- bind_rows(
+  glht_table(model_posthoc_entries_Mx_ex,  K, "entries"),
+  glht_table(model_posthoc_duration_Mx_ex, K, "duration"),
+  glht_table(model_posthoc_RO_Mx_ex,       K, "reoccurrence")
+)
+
+# add FDR corrections
+all_tests <- all_tests %>%
+  mutate(
+    p_fdr_global = p.adjust(p_raw, method = "fdr")               # FDR across ALL models/contrasts
+  ) %>%
+  group_by(model) %>%
+  mutate(
+    p_fdr_within_model = p.adjust(p_raw, method = "fdr")         # optional: FDR within each model
+  ) %>%
+  ungroup() %>%
+  arrange(p_fdr_global)
+
+# inspect results
+all_tests
+# If you want a per-model table:
+split(all_tests, all_tests$model)
+
+####Effect size calculation: Cohens d' = difference in mean/ SD_pooled (SD of residuals)
+
+all_tests <- all_tests %>%
+  mutate(
+    cohens_d = case_when(
+      model == "entries" ~ estimate / sigma(model_posthoc_entries_Mx_ex),
+      model == "duration" ~ estimate / sigma(model_posthoc_duration_Mx_ex),
+      model == "reoccurrence" ~ estimate / sigma(model_posthoc_RO_Mx_ex)
+    )
+  )
+
+# View results with effect sizes
+all_tests %>%
+  select(model, contrast, estimate, se, p_raw, p_fdr_global, cohens_d)
+
+```
+
+
+#### Retained Frames
+
+```{r}
+d <- ggplot(RetainedFrames, aes(x = group, y = retainedframes_value/300, fill = group)) +   
+  geom_violin(trim = FALSE) +   
+  geom_jitter(aes(color = group), width = 0.2, size = 1.5, alpha = 0.6, show.legend = FALSE) +
+  theme_minimal() +   
+  scale_fill_manual(values = c("#C0B5BE","#C0B5BE")) + 
+  scale_color_manual(values = c("#a08a9a","#a08a9a")) +
+  labs(title = "Anterior Insula Activation", x = "Group", y = "temporal fraction") +   
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 15),  
+    axis.text.y = element_text(size = 15),                         
+    axis.title.x = element_text(size = 15),                        
+    axis.title.y = element_text(size = 15),                        
+    plot.title = element_text(size = 15),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    panel.background = element_blank(), 
+        axis.line = element_line(color = "black"), 
+    axis.ticks.y = element_line(color = "black", linewidth = 0.3),
+    axis.ticks.length = unit(3, "pt")    
+  )
+
+data_summary <- function(x) {
+   m <- mean(x)
+   ymin <- m-sd(x)
+   ymax <- m+sd(x)
+   return(c(y=m,ymin=ymin,ymax=ymax))
+}
+
+d + stat_summary(fun.data=data_summary)
+
+fig2c <- d + stat_summary(fun.data=data_summary)
+
+ggsave("Figure_2c.tiff",
+       plot = fig2c,
+       dpi = 600,
+       width = 5.3,
+       height = 6,
+       units = "in",
+       device = "tiff",
+       compression = "lzw")
+
+# Summary Statistics
+RetainedFrames %>%
+  group_by(group) %>%
+  get_summary_stats(retainedframes_value, type = "mean_sd")
+
+# Inspect distribution
+ggplot(RetainedFrames, aes(x = retainedframes_value, fill = group)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Age distribution by group")
+
+# Test normality (Shapiro-Wilk test) in each group
+shapiro.test(RetainedFrames$retainedframes_value[RetainedFrames$group == "CPP"]) 
+shapiro.test(RetainedFrames$retainedframes_value[RetainedFrames$group == "HC"]) 
+
+# Check for variance equality (optional)
+var.test(retainedframes_value ~ group, data = RetainedFrames)
+
+# Choose the appropriate test
+# If both groups are approximately normal and variances are equal -> t-test
+# If variances differ -> Welch's t-test
+# If non-normal -> Wilcoxon test
+
+# t-tests 
+stat.test <- RetainedFrames %>%
+  wilcox_test(retainedframes_value ~ group) %>%
+  add_significance()
+stat.test
+
+wilcox.test(retainedframes_value ~ group, data = RetainedFrames, exact = FALSE)
+
+```
